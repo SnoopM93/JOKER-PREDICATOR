@@ -20,7 +20,7 @@ conversations = {}
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "JOKER V6.8.2 FULL FIX"
+def home(): return "JOKER V6.8.3"
 def run_flask(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 threading.Thread(target=run_flask).start()
 
@@ -31,11 +31,11 @@ def get_team_stats(team_id):
         corners=[]; buts_marques=[]; buts_encaisses=[]
         for f in r.get('response',[])[:5]:
             fid=f['fixture']['id']
-            goals_home=f['goals']['home']; goals_away=f['goals']['away']
-            if goals_home is None or goals_away is None: continue
+            gh=f['goals']['home']; ga=f['goals']['away']
+            if gh is None or ga is None: continue
             is_home=f['teams']['home']['id']==team_id
-            if is_home: buts_marques.append(goals_home); buts_encaisses.append(goals_away)
-            else: buts_marques.append(goals_away); buts_encaisses.append(goals_home)
+            if is_home: buts_marques.append(gh); buts_encaisses.append(ga)
+            else: buts_marques.append(ga); buts_encaisses.append(gh)
             stat=requests.get(f"https://v3.football.api-sports.io/fixtures/statistics?fixture={fid}", headers=headers).json()
             for ts in stat.get('response',[]):
                 if ts['team']['id']==team_id:
@@ -44,10 +44,10 @@ def get_team_stats(team_id):
                             try: corners.append(int(s['value']))
                             except: pass
         avg_c=sum(corners)/len(corners) if corners else 4.5
-        avg_m=sum(buts_marques)/len(buts_marques) if buts_marques else 1.1
-        avg_e=sum(buts_encaisses)/len(buts_encaisses) if buts_encaisses else 1.1
+        avg_m=sum(buts_marques)/len(buts_marques) if buts_marques else 1.0
+        avg_e=sum(buts_encaisses)/len(buts_encaisses) if buts_encaisses else 1.2
         return avg_c, avg_m, avg_e
-    except: return 4.5, 1.1, 1.1
+    except: return 4.5, 1.0, 1.2
 
 def format_date(iso):
     try:
@@ -60,42 +60,67 @@ def get_team_id_by_name(name):
         url=f"https://v3.football.api-sports.io/teams?search={name}"
         r=requests.get(url, headers=headers).json()
         if r.get('response'):
-            return r['response'][0]['team']['id']
+            return r['response'][0]['team']['id'], r['response'][0]['team']['name']
     except: pass
-    return None
+    return None, None
 
-def search_next_fixture(query):
-    try:
-        # Prend le premier mot significatif
-        for word in query.split():
-            if len(word) < 4: continue
-            team_id=get_team_id_by_name(word)
-            if team_id:
-                url=f"https://v3.football.api-sports.io/fixtures?team={team_id}&next=1"
-                fixtures=requests.get(url, headers=headers).json().get('response',[])
-                if fixtures:
-                    f=fixtures[0]
-                    return format_date(f['fixture']['date']), f['teams']['home']['name'], f['teams']['away']['name']
-    except: pass
-    return None, None, None
+def get_fixture_info(query):
+    # Cherche 2 equipes dans la question
+    words = [w for w in query.replace("vs"," ").replace(" "," ").split() if len(w)>=3]
+    team1_id=team1_name=None
+    team2_id=team2_name=None
+    found=[]
+    for w in words:
+        tid, tname = get_team_id_by_name(w)
+        if tid and tid not in [x[0] for x in found]:
+            found.append((tid, tname))
+            if len(found)>=2: break
+    if len(found)>=2:
+        team1_id, team1_name = found[0]
+        team2_id, team2_name = found[1]
+        # Cherche le prochain face a face
+        url=f"https://v3.football.api-sports.io/fixtures?team={team1_id}&next=10"
+        fixtures=requests.get(url, headers=headers).json().get('response',[])
+        for f in fixtures:
+            h_id=f['teams']['home']['id']; a_id=f['teams']['away']['id']
+            if (h_id==team2_id or a_id==team2_id):
+                date_str=format_date(f['fixture']['date'])
+                return date_str, team1_id, team1_name, team2_id, team2_name
+        # Sinon prend le prochain match de team1
+        if fixtures:
+            date_str=format_date(fixtures[0]['fixture']['date'])
+            return date_str, team1_id, team1_name, team2_id, team2_name
+    elif len(found)==1:
+        team1_id, team1_name = found[0]
+        url=f"https://v3.football.api-sports.io/fixtures?team={team1_id}&next=1"
+        fixtures=requests.get(url, headers=headers).json().get('response',[])
+        if fixtures:
+            date_str=format_date(fixtures[0]['fixture']['date'])
+            h_name=fixtures[0]['teams']['home']['name']
+            a_name=fixtures[0]['teams']['away']['name']
+            # Cherche team2 id
+            other_name = a_name if team1_id==fixtures[0]['teams']['home']['id'] else h_name
+            tid2, _ = get_team_id_by_name(other_name.split()[0])
+            return date_str, team1_id, team1_name, tid2, other_name
+    return None, None, None, None, None
 
 def build_prediction():
     today=datetime.date.today().strftime("%Y-%m-%d")
     year=datetime.date.today().year
-    season=year if datetime.date.today().month >= 8 else year - 1
+    season=year if datetime.date.today().month >=8 else year-1
     url=f"https://v3.football.api-sports.io/fixtures?date={today}&league=39&season={season}"
     try: fixtures=requests.get(url, headers=headers).json().get('response',[])[:5]
     except: return "Erreur API"
-    if not fixtures: return f"JOKER V6.8.2 - {today} - Pas de PL aujourd'hui, tag moi ex: Getafe vs Rayo"
-    msg=f"JOKER V6.8.2 FULL - {today}\n\n"
+    if not fixtures: return f"JOKER V6.8.3 - {today} - Pas de PL"
+    msg=f"JOKER V6.8.3 - {today}\n\n"
     for f in fixtures:
         home=f['teams']['home']['name']; away=f['teams']['away']['name']
         hc,h_m,h_e=get_team_stats(f['teams']['home']['id'])
         ac,a_m,a_e=get_team_stats(f['teams']['away']['id'])
         tc=round(hc+ac,1)
-        score_h=round((h_m+a_e)/2); score_a=round((a_m+h_e)/2)
+        sh=round((h_m+a_e)/2); sa=round((a_m+h_e)/2)
         date_str=format_date(f['fixture']['date'])
-        msg+=f"{home} vs {away}\n- Date: {date_str}\n- Score calcule: {score_h}-{score_a}\n- Corners: {tc}\n\n"
+        msg+=f"{home} vs {away}\n- Date: {date_str}\n- Score: {sh}-{sa}\n- Corners: {tc}\n\n"
     return msg
 
 @tasks.loop(time=datetime.time(hour=9, minute=0, tzinfo=datetime.timezone.utc))
@@ -105,7 +130,7 @@ async def daily_post():
 
 @bot.event
 async def on_ready():
-    print(f"Connecte V6.8.2")
+    print("V6.8.3 ready")
     if not daily_post.is_running(): daily_post.start()
 
 @bot.event
@@ -113,80 +138,88 @@ async def on_message(message):
     if message.author==bot.user: return
     await bot.process_commands(message)
     if bot.user.mentioned_in(message) or "joker" in message.content.lower():
-        user_id=message.author.id
-        question=message.content.replace(f"<@{bot.user.id}>","").strip()
-        if not question: question="Salut"
-        if any(x in question.lower() for x in ["!joker","!corners","!buts","prono du jour"]):
+        q=message.content.replace(f"<@{bot.user.id}>","").strip()
+        if not q: q="Salut"
+        if any(x in q.lower() for x in ["!joker","!corners","!buts","prono du jour"]):
             await message.reply(build_prediction())
             return
-        if user_id not in conversations: conversations[user_id]=[]
-        conversations[user_id].append({"role":"user","content":question})
-        if len(conversations[user_id])>12: conversations[user_id]=conversations[user_id][-12:]
+        uid=message.author.id
+        if uid not in conversations: conversations[uid]=[]
+        conversations[uid].append({"role":"user","content":q})
+        if len(conversations[uid])>12: conversations[uid]=conversations[uid][-12:]
         if groq_client:
             try:
                 async with message.channel.typing():
-                    date_found, h_name, a_name = search_next_fixture(question)
-                    if date_found:
-                        date_info = f"{h_name} vs {a_name} - Date: {date_found}"
+                    date_str, t1_id, t1_name, t2_id, t2_name = get_fixture_info(q)
+                    if not date_str: date_str="A venir - verifie calendrier"
+                    
+                    # CALCULE LES VRAIES STATS ICI, PAS DANS LLM
+                    if t1_id and t2_id:
+                        hc,h_m,h_e = get_team_stats(t1_id)
+                        ac,a_m,a_e = get_team_stats(t2_id)
+                        tc = round(hc+ac,1)
+                        calc_h = round((h_m + a_e)/2,2)
+                        calc_a = round((a_m + h_e)/2,2)
+                        score_h = round(calc_h)
+                        score_a = round(calc_a)
+                        stats_block = f"""
+STATS REELLES API (ne pas inventer):
+- {t1_name} (Domicile): marque {h_m:.2f}/match, encaisse {h_e:.2f}, corners {hc:.2f}
+- {t2_name} (Exterieur): marque {a_m:.2f}/match, encaisse {a_e:.2f}, corners {ac:.2f}
+- Total corners: {hc:.2f} + {ac:.2f} = {tc}
+- Calcul Score Domicile: ({h_m:.2f} + {a_e:.2f}) / 2 = {calc_h} -> {score_h}
+- Calcul Score Exterieur: ({a_m:.2f} + {h_e:.2f}) / 2 = {calc_a} -> {score_a}
+- SCORE FINAL CALCULE: {score_h}-{score_a}
+- DATE REELLE: {date_str}
+"""
                     else:
-                        date_info = "Date: A venir - Saison 2025-26, verifie calendrier officiel"
+                        stats_block = f"DATE: {date_str} - Stats non trouvees, utilise valeurs moyennes"
+                        hc=h_m=h_e=ac=a_m=a_e=0
+                        tc=9.5; score_h=1; score_a=0
 
                     system_prompt = f"""
-Tu es JOKER-PRONOSTIC V6.8.2 FULL.
-INFO MATCH REEL: {date_info}
+Tu es JOKER-PRONOSTIC V6.8.3
+Tu DOIS utiliser les STATS REELLES ci-dessous, INTERDIT d'inventer.
 
-REGLES ABSOLUES:
-1. Toujours en FRANCAIS
-2. PAS DE HASARD, 100% STATS REELLES
-3. INTERDIT d'utiliser LaTeX, interdit \\Rightarrow, \\rightarrow, $, {{ }}, \\. Utilise uniquement -> et = en texte normal
-4. FORMAT PRO complet obligatoire
+{stats_block}
 
-FORMAT A GARDER:
+REGLES:
+1. Francais uniquement
+2. PAS DE LATEX, utilise -> pas \\Rightarrow
+3. Utilise EXACTEMENT les chiffres fournis ci-dessus pour le calcul
+4. Date obligatoire: {date_str}
 
-**[Equipe A vs Equipe B] - Analyse PRO**
+FORMAT:
+
+**[{t1_name if t1_name else 'Equipe A'} vs {t2_name if t2_name else 'Equipe B'}] - Analyse PRO**
 
 **Date et Heure**
-- {date_info}
+- {date_str}
 
 **Score calcule (pas de hasard)**
-- Domicile marque: X.X/match, encaisse: Y.Y
-- Exterieur marque: X.X, encaisse: Y.Y
-- Calcul: (1.15 + 1.40) / 2 = 1.28 -> arrondi a 1-0
-- Score final: 1-0
+- Domicile ({t1_name}): marque {h_m if t1_id else 'X'}/match, encaisse {h_e if t1_id else 'Y'}
+- Exterieur ({t2_name}): marque {a_m if t2_id else 'X'}, encaisse {a_e if t2_id else 'Y'}
+- Calcul: ({h_m if t1_id else 'X'} + {a_e if t2_id else 'Y'})/2 = {calc_h if t1_id and t2_id else '...'} -> {score_h if t1_id and t2_id else '1'} et ({a_m if t1_id and t2_id else 'X'} + {h_e if t1_id and t2_id else 'Y'})/2 = {calc_a if t1_id and t2_id else '...'} -> {score_a if t1_id and t2_id else '0'}
+- Score final: {score_h if t1_id and t2_id else '1'}-{score_a if t1_id and t2_id else '0'}
 
 **Result odds**
 - 1 / X / 2
 
 **Corners**
-- Total calcule: 5.2 + 4.3 = 9.5
-- Over 9.5: OUI/NON
+- {hc if t1_id else 4.5} + {ac if t2_id else 4.5} = {tc if t1_id and t2_id else 9.5}
 
 **Handicap & Buts**
-- Domicile -0.5
-- Exterieur +0.5 -> Victoire ou Nul = tu gagnes
-- Over 2.5 buts
-
 **Pro-tip Tableau**
 | Parier | Pourquoi | Astuce | Cote |
 |---|---|---|---|
-| Score 1-0 | Stats 1.1 vs 1.2 | Calcule | 6.50 |
-| Over 9.5 corners | 9.5 calcules | SAFE | 1.85 |
-
 **Points cles**
-- Domicile: X buts / Y corners
-- Exterieur: X buts / Y corners
-
 **Quick take**
-SAFE: ... | SCORE: ... | QUI PAIE: ...
-
-N'ECRIS JAMAIS \\Rightarrow, ecris ->.
-INFO DATE: {date_info}
 """
-                    history=[{"role":"system","content":system_prompt}] + conversations[user_id]
-                    completion=groq_client.chat.completions.create(model="openai/gpt-oss-20b", messages=history)
-                    reponse=completion.choices[0].message.content
-                    conversations[user_id].append({"role":"assistant","content":reponse})
-                    await message.reply(reponse[:1900])
+                    history=[{"role":"system","content":system_prompt}] + conversations[uid]
+                    comp=groq_client.chat.completions.create(model="openai/gpt-oss-20b", messages=history)
+                    rep=comp.choices[0].message.content
+                    conversations[uid].append({"role":"assistant","content":rep})
+                    await message.reply(rep[:1900])
             except Exception as e: await message.reply(f"Erreur: {e}")
 
 @bot.command()
@@ -198,6 +231,6 @@ async def buts(ctx): await ctx.send(build_prediction())
 @bot.command()
 async def reset(ctx):
     if ctx.author.id in conversations: del conversations[ctx.author.id]
-    await ctx.send("Memoire effacee boss!")
+    await ctx.send("Memoire effacee!")
 
 bot.run(TOKEN)
