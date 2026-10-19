@@ -3,8 +3,9 @@ from discord.ext import tasks
 import requests
 import datetime
 import os
+from flask import Flask
+import threading
 
-# --- CONFIG SECURISEE - plus rien en clair ---
 TOKEN = os.getenv("DISCORD_TOKEN")
 API_KEY = os.getenv("API_FOOTBALL_KEY")
 CHANNEL_ID = 1216885799216484413
@@ -12,6 +13,17 @@ CHANNEL_ID = 1216885799216484413
 headers = {"x-apisports-key": API_KEY}
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
+
+# --- Petit serveur web pour Render gratuit ---
+app = Flask(__name__)
+@app.route('/')
+def home():
+    return "JOKER-PREDICATOR is alive!"
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+threading.Thread(target=run_flask).start()
+# --------------------------------------------
 
 def get_team_avg_corners(team_id):
     try:
@@ -36,28 +48,21 @@ def build_prediction():
     url = f"https://v3.football.api-sports.io/fixtures?date={today}&league=39&season=2024"
     fixtures = requests.get(url, headers=headers).json()['response'][:5]
     if not fixtures:
-        return f"**🔮 JOKER-PREDICATOR V3 - {today}**\nPas de matchs PL aujourd'hui."
-    msg = f"**🔮 JOKER-PREDICATOR V3 - {today} - 0% RANDOM**\n\n"
+        return f"**🔮 JOKER-PREDICATOR V3 - {today}**\nPas de matchs PL."
+    msg = f"**🔮 JOKER-PREDICATOR V3 - {today}**\n\n"
     for f in fixtures:
         home = f['teams']['home']['name']
         away = f['teams']['away']['name']
-        home_id = f['teams']['home']['id']
-        away_id = f['teams']['away']['id']
-        home_avg = get_team_avg_corners(home_id)
-        away_avg = get_team_avg_corners(away_id)
-        total = round(home_avg + away_avg, 1)
-        pred = f"Over 9.5 {int(60+total)}% ✅" if total >= 11 else f"Under 9.5 {int(65-total)}%"
-        msg += f"**{home} vs {away}**\n├─ Corners: {total} | {pred}\n└─ 📊 5 derniers matchs\n\n"
+        total = round(get_team_avg_corners(f['teams']['home']['id']) + get_team_avg_corners(f['teams']['away']['id']),1)
+        pred = f"Over 9.5 {int(60+total)}% ✅" if total >= 11 else f"Under 9.5"
+        msg += f"**{home} vs {away}**\nCorners: {total} | {pred}\n\n"
     return msg
 
 @tasks.loop(hours=24)
 async def daily_post():
     channel = client.get_channel(CHANNEL_ID)
     if channel:
-        try:
-            await channel.send(build_prediction())
-        except Exception as e:
-            print(e)
+        await channel.send(build_prediction())
 
 @client.event
 async def on_ready():
