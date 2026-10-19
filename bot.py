@@ -71,27 +71,25 @@ async def on_message(message):
         question = message.content.replace(f"<@{bot.user.id}>", "").strip()
         if not question: question = "Salut"
 
-        # Si c'est une demande de prono, on donne les vrais chiffres
         if any(x in question.lower() for x in ["corner","but","prono","match"]):
             await message.reply(build_prediction())
             return
 
-        # SINON, il répond comme moi, avec une IA
         if groq_client:
             try:
                 async with message.channel.typing():
                     completion = groq_client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
+                        model="llama-3.1-8b-instant",
                         messages=[
-                            {"role":"system","content":"Tu es JOKER-PRONOSTIC, un assistant IA expert en paris sportifs, sympa, tu parles comme un pote de Lomé, un peu d'argot, tu aides pour corners et buts mais tu peux parler de tout. Réponds court."},
+                            {"role":"system","content":"Tu es JOKER-PRONOSTIC, un assistant IA expert en paris sportifs, sympa, tu parles comme un pote de Lomé, tu aides pour corners et buts mais tu peux parler de tout. Réponds court."},
                             {"role":"user","content":question}
                         ]
                     )
                     await message.reply(completion.choices[0].message.content[:1900])
             except Exception as e:
-                await message.reply(f"Mon cerveau IA bug un peu: {e}\nMais tape `!joker` pour le prono.")
+                await message.reply(f"Bug IA: {e}\nTape !joker pour le prono.")
         else:
-            await message.reply("Ajoute ta clé GROQ_API_KEY sur Render pour que je devienne intelligent comme ChatGPT !")
+            await message.reply("Ajoute GROQ_API_KEY sur Render!")
 
 @bot.command()
 async def joker(ctx): await ctx.send(build_prediction())
