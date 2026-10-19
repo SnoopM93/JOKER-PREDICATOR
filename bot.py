@@ -2,10 +2,11 @@ import discord
 from discord.ext import tasks
 import requests
 import datetime
+import os
 
-# --- CONFIG - REMPLACE LES 2 LIGNES CI-DESSOUS ---
-TOKEN = "METS_TON_TOKEN_DISCORD_ICI"
-API_KEY = "METS_TA_CLE_API_FOOTBALL_ICI"
+# --- CONFIG SECURISEE - plus rien en clair ---
+TOKEN = os.getenv("DISCORD_TOKEN")
+API_KEY = os.getenv("API_FOOTBALL_KEY")
 CHANNEL_ID = 1216885799216484413
 
 headers = {"x-apisports-key": API_KEY}
@@ -34,11 +35,9 @@ def build_prediction():
     today = datetime.date.today().strftime("%Y-%m-%d")
     url = f"https://v3.football.api-sports.io/fixtures?date={today}&league=39&season=2024"
     fixtures = requests.get(url, headers=headers).json()['response'][:5]
-    
     if not fixtures:
-        return f"**🔮 JOKER-PREDICATOR V3 - {today}**\nPas de matchs PL aujourd'hui - le bot check Liga/Serie A demain."
-    
-    msg = f"**🔮 JOKER-PREDICATOR V3 - {today} - 0% RANDOM**\n_Vraies stats API_\n\n"
+        return f"**🔮 JOKER-PREDICATOR V3 - {today}**\nPas de matchs PL aujourd'hui."
+    msg = f"**🔮 JOKER-PREDICATOR V3 - {today} - 0% RANDOM**\n\n"
     for f in fixtures:
         home = f['teams']['home']['name']
         away = f['teams']['away']['name']
@@ -48,20 +47,17 @@ def build_prediction():
         away_avg = get_team_avg_corners(away_id)
         total = round(home_avg + away_avg, 1)
         pred = f"Over 9.5 {int(60+total)}% ✅" if total >= 11 else f"Under 9.5 {int(65-total)}%"
-        msg += f"**{home} vs {away}**\n"
-        msg += f"├─ 🟨 Corners: {total} ({home_avg:.1f}+{away_avg:.1f}) | {pred}\n"
-        msg += f"└─ 📊 Basé sur 5 derniers matchs réels\n\n"
+        msg += f"**{home} vs {away}**\n├─ Corners: {total} | {pred}\n└─ 📊 5 derniers matchs\n\n"
     return msg
 
 @tasks.loop(hours=24)
 async def daily_post():
     channel = client.get_channel(CHANNEL_ID)
-    if not channel:
-        return
-    try:
-        await channel.send(build_prediction())
-    except Exception as e:
-        await channel.send(f"Erreur: {e}")
+    if channel:
+        try:
+            await channel.send(build_prediction())
+        except Exception as e:
+            print(e)
 
 @client.event
 async def on_ready():
