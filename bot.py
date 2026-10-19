@@ -20,7 +20,7 @@ conversations = {}
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "JOKER V6.8.1 FULL"
+def home(): return "JOKER V6.8.2 FULL FIX"
 def run_flask(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 threading.Thread(target=run_flask).start()
 
@@ -55,13 +55,39 @@ def format_date(iso):
         return dt.strftime("%d/%m/%Y a %H:%M UTC")
     except: return iso
 
+def get_team_id_by_name(name):
+    try:
+        url=f"https://v3.football.api-sports.io/teams?search={name}"
+        r=requests.get(url, headers=headers).json()
+        if r.get('response'):
+            return r['response'][0]['team']['id']
+    except: pass
+    return None
+
+def search_next_fixture(query):
+    try:
+        # Prend le premier mot significatif
+        for word in query.split():
+            if len(word) < 4: continue
+            team_id=get_team_id_by_name(word)
+            if team_id:
+                url=f"https://v3.football.api-sports.io/fixtures?team={team_id}&next=1"
+                fixtures=requests.get(url, headers=headers).json().get('response',[])
+                if fixtures:
+                    f=fixtures[0]
+                    return format_date(f['fixture']['date']), f['teams']['home']['name'], f['teams']['away']['name']
+    except: pass
+    return None, None, None
+
 def build_prediction():
     today=datetime.date.today().strftime("%Y-%m-%d")
-    url=f"https://v3.football.api-sports.io/fixtures?date={today}&league=39&season=2024"
+    year=datetime.date.today().year
+    season=year if datetime.date.today().month >= 8 else year - 1
+    url=f"https://v3.football.api-sports.io/fixtures?date={today}&league=39&season={season}"
     try: fixtures=requests.get(url, headers=headers).json().get('response',[])[:5]
     except: return "Erreur API"
-    if not fixtures: return f"JOKER V6.8.1 - {today} - Pas de PL, tag moi"
-    msg=f"JOKER V6.8.1 FULL - {today}\n\n"
+    if not fixtures: return f"JOKER V6.8.2 - {today} - Pas de PL aujourd'hui, tag moi ex: Getafe vs Rayo"
+    msg=f"JOKER V6.8.2 FULL - {today}\n\n"
     for f in fixtures:
         home=f['teams']['home']['name']; away=f['teams']['away']['name']
         hc,h_m,h_e=get_team_stats(f['teams']['home']['id'])
@@ -69,7 +95,7 @@ def build_prediction():
         tc=round(hc+ac,1)
         score_h=round((h_m+a_e)/2); score_a=round((a_m+h_e)/2)
         date_str=format_date(f['fixture']['date'])
-        msg+=f"{home} vs {away}\n- Date: {date_str}\n- Score calcule: {score_h}-{score_a}\n- Corners: {tc} ({hc:.1f}+{ac:.1f})\n- Buts: D {h_m:.1f} vs E {a_e:.1f}\n\n"
+        msg+=f"{home} vs {away}\n- Date: {date_str}\n- Score calcule: {score_h}-{score_a}\n- Corners: {tc}\n\n"
     return msg
 
 @tasks.loop(time=datetime.time(hour=9, minute=0, tzinfo=datetime.timezone.utc))
@@ -79,7 +105,7 @@ async def daily_post():
 
 @bot.event
 async def on_ready():
-    print(f"Connecte V6.8.1 FULL")
+    print(f"Connecte V6.8.2")
     if not daily_post.is_running(): daily_post.start()
 
 @bot.event
@@ -99,24 +125,33 @@ async def on_message(message):
         if groq_client:
             try:
                 async with message.channel.typing():
-                    system_prompt = """
-Tu es JOKER-PRONOSTIC V6.8.1 FULL, expert de Lome, specialiste SCORE + CORNERS + BUTS.
-REGLES:
+                    date_found, h_name, a_name = search_next_fixture(question)
+                    if date_found:
+                        date_info = f"{h_name} vs {a_name} - Date: {date_found}"
+                    else:
+                        date_info = "Date: A venir - Saison 2025-26, verifie calendrier officiel"
+
+                    system_prompt = f"""
+Tu es JOKER-PRONOSTIC V6.8.2 FULL.
+INFO MATCH REEL: {date_info}
+
+REGLES ABSOLUES:
 1. Toujours en FRANCAIS
 2. PAS DE HASARD, 100% STATS REELLES
-3. FORMAT PRO complet avec TOUT: date, score, corners, tableau
+3. INTERDIT d'utiliser LaTeX, interdit \\Rightarrow, \\rightarrow, $, {{ }}, \\. Utilise uniquement -> et = en texte normal
+4. FORMAT PRO complet obligatoire
 
-FORMAT OBLIGATOIRE A GARDER:
+FORMAT A GARDER:
 
 **[Equipe A vs Equipe B] - Analyse PRO**
 
 **Date et Heure**
-- Date: JJ/MM/AAAA a HH:MM UTC (si tu ne l'as pas, mets "Date: A confirmer - verifie calendrier")
+- {date_info}
 
 **Score calcule (pas de hasard)**
 - Domicile marque: X.X/match, encaisse: Y.Y
 - Exterieur marque: X.X, encaisse: Y.Y
-- Calcul: (marques D + encaisses E)/2
+- Calcul: (1.15 + 1.40) / 2 = 1.28 -> arrondi a 1-0
 - Score final: 1-0
 
 **Result odds**
@@ -136,7 +171,6 @@ FORMAT OBLIGATOIRE A GARDER:
 |---|---|---|---|
 | Score 1-0 | Stats 1.1 vs 1.2 | Calcule | 6.50 |
 | Over 9.5 corners | 9.5 calcules | SAFE | 1.85 |
-| Handicap +0.5 | Assurance | Value | 1.90 |
 
 **Points cles**
 - Domicile: X buts / Y corners
@@ -145,7 +179,8 @@ FORMAT OBLIGATOIRE A GARDER:
 **Quick take**
 SAFE: ... | SCORE: ... | QUI PAIE: ...
 
-Tu gardes TOUT: date, score, corners, tableau. Jamais enlever.
+N'ECRIS JAMAIS \\Rightarrow, ecris ->.
+INFO DATE: {date_info}
 """
                     history=[{"role":"system","content":system_prompt}] + conversations[user_id]
                     completion=groq_client.chat.completions.create(model="openai/gpt-oss-20b", messages=history)
